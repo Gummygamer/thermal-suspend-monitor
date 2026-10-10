@@ -2,7 +2,7 @@
 
 A small Linux user service that monitors CPU and NVIDIA GPU temperatures and requests system suspend when configured limits are reached.
 
-It also includes a compact, translucent Tk window that plots CPU and NVIDIA GPU temperatures over a rolling 15-minute period.
+It also includes a compact GTK4 glass-style window that plots CPU and NVIDIA GPU temperatures over a rolling 15-minute period, with a translucent surface and crisp graph/text layers.
 
 ## Policy
 
@@ -27,7 +27,7 @@ systemctl --user daemon-reload
 systemctl --user enable --now thermal-suspend-monitor.service
 ```
 
-The graph window uses Python's Tk GUI toolkit (`python3-tk` on Ubuntu). Launch it with:
+The graph window uses GTK4 and Pycairo (`python3-gi`, `gir1.2-gtk-4.0`, and `python3-cairo` on Ubuntu). Launch it with:
 
 ```sh
 python3 ~/.local/bin/thermal-temperature-widget.py

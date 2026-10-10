@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
-"""Live CPU and NVIDIA GPU temperature chart using Python's Tk GUI toolkit."""
+"""Live CPU and NVIDIA GPU chart in a translucent GTK4 glass-style window."""
 from collections import deque
 import glob
+import io
 import pathlib
 import queue
 import subprocess
 import threading
 import time
-import tkinter as tk
-from tkinter import ttk
+
+import cairo
+import gi
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
+from gi.repository import Gdk, GLib, Gtk
 
 WINDOW_SECONDS = 15 * 60
 SAMPLE_SECONDS = 2
@@ -17,14 +23,40 @@ GPU_QUERY = ["/usr/bin/nvidia-smi", "--query-gpu=temperature.gpu", "--format=csv
 CPU_ZONE_TYPES = {"TCPU", "x86_pkg_temp"}
 LIMIT_C = 95
 
-BG = "#111821"
-CARD = "#1b2632"
-FG = "#ffffff"
-DIM = "#d0dce8"
-GRID = "#34414e"
-CPU_COLOR = "#35c7f4"
-GPU_COLOR = "#ffad3d"
-LIMIT_COLOR = "#ff6e69"
+BG = (0.055, 0.075, 0.095)
+GRID = (0.78, 0.86, 0.94)
+TEXT = (0.93, 0.96, 1.0)
+CPU_COLOR = (0.20, 0.78, 0.98)
+GPU_COLOR = (1.00, 0.68, 0.24)
+LIMIT_COLOR = (1.00, 0.43, 0.40)
+
+GLASS_CSS = b"""
+window.glass-window {
+  background-color: rgba(22, 32, 44, 0.24);
+  background-image: linear-gradient(145deg,
+    rgba(255, 255, 255, 0.23),
+    rgba(255, 255, 255, 0.08) 44%,
+    rgba(84, 154, 194, 0.12));
+  border: 1px solid rgba(255, 255, 255, 0.36);
+  border-radius: 18px;
+}
+headerbar.titlebar {
+  background-color: rgba(255, 255, 255, 0.10);
+  background-image: linear-gradient(90deg,
+    rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.025));
+  box-shadow: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.20);
+  border-radius: 17px 17px 0 0;
+}
+.glass-card {
+  background-color: rgba(255, 255, 255, 0.105);
+  background-image: linear-gradient(135deg,
+    rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.025));
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 12px;
+}
+.dim-label { color: rgba(240, 247, 255, 0.78); }
+"""
 
 
 def read_cpu_temperature():
@@ -62,84 +94,126 @@ def read_gpu_temperature():
     return max(values) if values else None
 
 
-class TemperatureWidget:
+class TemperatureWidget(Gtk.Application):
     def __init__(self):
-        self.root = tk.Tk()
-        self.root.title("Thermal Monitor")
-        self.root.geometry("500x350")
-        self.root.minsize(400, 290)
-        self.root.configure(background=BG)
-        try:
-            self.root.attributes("-alpha", 0.62)
-        except tk.TclError:
-            pass
+        super().__init__(application_id="com.github.gummygamer.ThermalSuspendMonitor")
         self.samples = deque(maxlen=WINDOW_SECONDS // SAMPLE_SECONDS + 2)
-        self.last_gpu_read = 0.0
-        self.gpu_temperature = None
         self.gpu_results = queue.SimpleQueue()
-        self.gpu_poll_in_flight = False
+        self.gpu_temperature = None
         self.cpu_temperature = None
-        self._build_ui()
+        self.last_gpu_read = 0.0
+        self.gpu_poll_in_flight = False
+        self.window = None
+
+    def do_activate(self):
+        if self.window:
+            self.window.present()
+            return
+
+        provider = Gtk.CssProvider()
+        provider.load_from_data(GLASS_CSS)
+        Gtk.StyleContext.add_provider_for_display(
+            Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+
+        self.window = Gtk.ApplicationWindow(application=self, title="Thermal Monitor")
+        self.window.add_css_class("glass-window")
+        self.window.set_default_size(500, 350)
+        self.window.set_size_request(400, 290)
+
+        header = Gtk.HeaderBar()
+        header.add_css_class("titlebar")
+        header.set_title_widget(Gtk.Label(label="Thermal Monitor"))
+        self.window.set_titlebar(header)
+
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        root.set_margin_top(12)
+        root.set_margin_bottom(10)
+        root.set_margin_start(14)
+        root.set_margin_end(14)
+        self.window.set_child(root)
+
+        title = Gtk.Label()
+        title.set_markup('<span size="large" weight="bold">Temperature history</span>')
+        title.set_xalign(0)
+        root.append(title)
+        subtitle = Gtk.Label(label="CPU and NVIDIA GPU · last 15 minutes")
+        subtitle.set_xalign(0)
+        subtitle.add_css_class("dim-label")
+        root.append(subtitle)
+
+        cards = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        root.append(cards)
+        self.cpu_value = self._make_card(cards, "CPU", CPU_COLOR)
+        self.gpu_value = self._make_card(cards, "NVIDIA GPU", GPU_COLOR)
+
+        legend = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
+        legend.set_margin_top(1)
+        root.append(legend)
+        self._add_legend_item(legend, "CPU", CPU_COLOR)
+        self._add_legend_item(legend, "NVIDIA GPU", GPU_COLOR)
+        self._add_legend_item(legend, "95 °C suspend", LIMIT_COLOR)
+
+        self.picture = Gtk.Picture()
+        self.picture.set_can_shrink(True)
+        self.picture.set_content_fit(Gtk.ContentFit.FILL)
+        self.picture.set_size_request(-1, 175)
+        self.picture.set_vexpand(True)
+        root.append(self.picture)
+
+        footer = Gtk.Label(label="Emergency: CPU 100 °C · GPU 102 °C")
+        footer.set_xalign(0)
+        footer.add_css_class("dim-label")
+        root.append(footer)
+
+        GLib.timeout_add(SAMPLE_SECONDS * 1000, self.update_readings)
         self.update_readings()
-
-    def _build_ui(self):
-        style = ttk.Style(self.root)
-        style.theme_use("clam")
-        style.configure("TFrame", background=BG)
-        style.configure("Card.TFrame", background=CARD)
-        style.configure("Title.TLabel", background=BG, foreground=FG, font=("Sans", 14, "bold"))
-        style.configure("Subtitle.TLabel", background=BG, foreground=DIM, font=("Sans", 9))
-        style.configure("CPUName.TLabel", background=CARD, foreground=CPU_COLOR, font=("Sans", 9, "bold"))
-        style.configure("GPUName.TLabel", background=CARD, foreground=GPU_COLOR, font=("Sans", 9, "bold"))
-        style.configure("Value.TLabel", background=CARD, foreground=FG, font=("Sans", 18, "bold"))
-        style.configure("Footer.TLabel", background=BG, foreground=DIM, font=("Sans", 8))
-
-        outer = ttk.Frame(self.root, padding=(12, 10))
-        outer.pack(fill="both", expand=True)
-        ttk.Label(outer, text="Temperature history", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(outer, text="CPU and NVIDIA GPU · last 15 minutes", style="Subtitle.TLabel").pack(anchor="w", pady=(2, 8))
-
-        cards = ttk.Frame(outer)
-        cards.pack(fill="x", pady=(0, 8))
-        cards.columnconfigure(0, weight=1)
-        cards.columnconfigure(1, weight=1)
-        self.cpu_value = self._make_card(cards, 0, "CPU", "CPUName.TLabel")
-        self.gpu_value = self._make_card(cards, 1, "NVIDIA GPU", "GPUName.TLabel")
-
-        legend = ttk.Frame(outer)
-        legend.pack(fill="x", pady=(0, 3))
-        for label, color in (("CPU", CPU_COLOR), ("NVIDIA GPU", GPU_COLOR), ("95 °C suspend", LIMIT_COLOR)):
-            item = tk.Frame(legend, background=BG)
-            item.pack(side="left", padx=(0, 12))
-            tk.Label(item, text="━", background=BG, foreground=color, font=("Sans", 10, "bold")).pack(side="left")
-            tk.Label(item, text=label, background=BG, foreground=FG, font=("Sans", 9)).pack(side="left", padx=(3, 0))
-
-        self.chart = tk.Canvas(outer, background=BG, highlightthickness=0, height=190)
-        self.chart.pack(fill="both", expand=True)
-        self.chart.bind("<Configure>", lambda _event: self.draw_chart())
-        ttk.Label(
-            outer,
-            text="95 °C for 10 s · emergency CPU 100 °C / GPU 102 °C",
-            style="Footer.TLabel",
-        ).pack(anchor="w", pady=(10, 0))
+        self.window.present()
 
     @staticmethod
-    def _make_card(parent, column, name, name_style):
-        card = ttk.Frame(parent, style="Card.TFrame", padding=(10, 6))
-        card.grid(row=0, column=column, sticky="ew", padx=(0, 6) if column == 0 else (6, 0))
-        ttk.Label(card, text=name, style=name_style).pack(anchor="w")
-        value = ttk.Label(card, text="— °C", style="Value.TLabel")
-        value.pack(anchor="w", pady=(3, 0))
+    def _make_card(parent, name, color):
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        card.add_css_class("glass-card")
+        card.set_hexpand(True)
+        card.set_margin_top(1)
+        card.set_margin_bottom(1)
+        card.set_margin_start(1)
+        card.set_margin_end(1)
+        card.set_margin_top(7)
+        card.set_margin_bottom(7)
+        card.set_margin_start(10)
+        card.set_margin_end(10)
+        heading = Gtk.Label(label=name)
+        heading.set_xalign(0)
+        heading.set_markup(f'<span foreground="#{int(color[0]*255):02x}{int(color[1]*255):02x}{int(color[2]*255):02x}" weight="bold">{name}</span>')
+        card.append(heading)
+        value = Gtk.Label(label="— °C")
+        value.set_xalign(0)
+        value.set_markup('<span size="x-large" weight="bold">— °C</span>')
+        card.append(value)
+        parent.append(card)
         return value
+
+    @staticmethod
+    def _add_legend_item(parent, label, color):
+        item = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        color_hex = "#" + "".join(f"{int(channel * 255):02x}" for channel in color)
+        swatch = Gtk.Label()
+        swatch.set_markup(f'<span foreground="{color_hex}" weight="bold">━</span>')
+        item.append(swatch)
+        text = Gtk.Label(label=label)
+        text.add_css_class("dim-label")
+        item.append(text)
+        parent.append(item)
 
     def update_readings(self):
         now = time.time()
         try:
             self.cpu_temperature = read_cpu_temperature()
-            self.cpu_value.configure(text=f"{self.cpu_temperature:.1f} °C")
+            self.cpu_value.set_markup(f'<span size="x-large" weight="bold">{self.cpu_temperature:.1f} °C</span>')
         except (OSError, ValueError, RuntimeError):
             self.cpu_temperature = None
-            self.cpu_value.configure(text="Unavailable")
+            self.cpu_value.set_text("Unavailable")
 
         while True:
             try:
@@ -151,16 +225,17 @@ class TemperatureWidget:
             self.last_gpu_read = now
             self.gpu_poll_in_flight = True
             threading.Thread(target=self._read_gpu_in_background, daemon=True).start()
-        self.gpu_value.configure(
-            text="Unavailable" if self.gpu_temperature is None else f"{self.gpu_temperature:.1f} °C"
-        )
+        if self.gpu_temperature is None:
+            self.gpu_value.set_text("Unavailable")
+        else:
+            self.gpu_value.set_markup(f'<span size="x-large" weight="bold">{self.gpu_temperature:.1f} °C</span>')
 
         self.samples.append((now, self.cpu_temperature, self.gpu_temperature))
         cutoff = now - WINDOW_SECONDS
         while self.samples and self.samples[0][0] < cutoff:
             self.samples.popleft()
-        self.draw_chart()
-        self.root.after(SAMPLE_SECONDS * 1000, self.update_readings)
+        self.render_chart()
+        return GLib.SOURCE_CONTINUE
 
     def _read_gpu_in_background(self):
         try:
@@ -168,12 +243,26 @@ class TemperatureWidget:
         except (OSError, ValueError, subprocess.SubprocessError, RuntimeError) as exc:
             self.gpu_results.put((None, str(exc)))
 
-    def draw_chart(self):
-        canvas = self.chart
-        canvas.delete("all")
-        width = max(1, canvas.winfo_width())
-        height = max(1, canvas.winfo_height())
-        left, right, top, bottom = 58, width - 20, 22, height - 42
+    @staticmethod
+    def _text(context, x, y, value, size=10, alpha=0.88):
+        context.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
+        context.set_font_size(size)
+        context.set_source_rgba(*TEXT, alpha)
+        context.move_to(x, y)
+        context.show_text(value)
+
+    def render_chart(self):
+        width = max(380, self.picture.get_width())
+        height = max(150, self.picture.get_height())
+        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
+        context = cairo.Context(surface)
+        context.set_operator(cairo.OPERATOR_CLEAR)
+        context.paint()
+        context.set_operator(cairo.OPERATOR_OVER)
+        context.set_source_rgba(*BG, 0.10)
+        context.paint()
+
+        left, right, top, bottom = 48, width - 10, 10, height - 27
         plot_width, plot_height = max(1, right - left), max(1, bottom - top)
         low, high = 30.0, 105.0
         now = time.time()
@@ -181,41 +270,54 @@ class TemperatureWidget:
         def y_for(value):
             return bottom - (value - low) / (high - low) * plot_height
 
+        context.set_line_width(1)
         for value in (30, 50, 70, 90, 100):
             y = y_for(value)
-            canvas.create_line(left, y, right, y, fill=GRID, width=1)
-            canvas.create_text(8, y, anchor="w", text=f"{value}°", fill=DIM, font=("Sans", 9))
-        canvas.create_line(left, y_for(LIMIT_C), right, y_for(LIMIT_C), fill=LIMIT_COLOR, dash=(5, 4), width=1)
+            context.set_source_rgba(*GRID, 0.30)
+            context.move_to(left, y)
+            context.line_to(right, y)
+            context.stroke()
+            self._text(context, 3, y + 3, f"{value}°", 9, 0.84)
+        context.set_source_rgba(*LIMIT_COLOR, 0.9)
+        context.set_dash([5, 4])
+        context.move_to(left, y_for(LIMIT_C))
+        context.line_to(right, y_for(LIMIT_C))
+        context.stroke()
+        context.set_dash([])
 
         for minutes in (15, 10, 5, 0):
             x = left + plot_width * (1 - minutes / 15)
-            canvas.create_line(x, top, x, bottom, fill=GRID, width=1)
+            context.set_source_rgba(*GRID, 0.24)
+            context.move_to(x, top)
+            context.line_to(x, bottom)
+            context.stroke()
             label = "Now" if minutes == 0 else f"−{minutes} min"
-            canvas.create_text(x, height - 16, text=label, fill=DIM, font=("Sans", 9))
+            self._text(context, x - (17 if minutes == 0 else 21), height - 5, label, 9, 0.84)
 
         for index, color in ((1, CPU_COLOR), (2, GPU_COLOR)):
-            segment = []
+            context.set_source_rgb(*color)
+            context.set_line_width(2.4)
+            context.set_line_join(cairo.LINE_JOIN_ROUND)
+            drawing = False
             for stamp, cpu, gpu in self.samples:
                 value = cpu if index == 1 else gpu
                 if value is None:
-                    self._draw_segment(canvas, segment, color)
-                    segment = []
+                    drawing = False
                     continue
                 x = left + plot_width * max(0.0, min(1.0, 1 - (now - stamp) / WINDOW_SECONDS))
-                segment.extend((x, y_for(value)))
-            self._draw_segment(canvas, segment, color)
+                y = y_for(value)
+                if not drawing:
+                    context.move_to(x, y)
+                    drawing = True
+                else:
+                    context.line_to(x, y)
+            context.stroke()
 
-    @staticmethod
-    def _draw_segment(canvas, points, color):
-        if len(points) >= 4:
-            canvas.create_line(*points, fill=color, width=2.5, smooth=True, splinesteps=12)
-        elif len(points) == 2:
-            x, y = points
-            canvas.create_oval(x - 2, y - 2, x + 2, y + 2, fill=color, outline=color)
-
-    def run(self):
-        self.root.mainloop()
+        png = io.BytesIO()
+        surface.write_to_png(png)
+        texture = Gdk.Texture.new_from_bytes(GLib.Bytes.new(png.getvalue()))
+        self.picture.set_paintable(texture)
 
 
 if __name__ == "__main__":
-    TemperatureWidget().run()
+    TemperatureWidget().run(None)
