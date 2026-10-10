@@ -106,6 +106,14 @@ class TemperatureWidget:
         self.cpu_value = self._make_card(cards, 0, "CPU", "CPUName.TLabel")
         self.gpu_value = self._make_card(cards, 1, "NVIDIA GPU", "GPUName.TLabel")
 
+        legend = ttk.Frame(outer)
+        legend.pack(fill="x", pady=(0, 3))
+        for label, color in (("CPU", CPU_COLOR), ("NVIDIA GPU", GPU_COLOR), ("95 °C suspend", LIMIT_COLOR)):
+            item = tk.Frame(legend, background=BG)
+            item.pack(side="left", padx=(0, 12))
+            tk.Label(item, text="━", background=BG, foreground=color, font=("Sans", 10, "bold")).pack(side="left")
+            tk.Label(item, text=label, background=BG, foreground=FG, font=("Sans", 9)).pack(side="left", padx=(3, 0))
+
         self.chart = tk.Canvas(outer, background=BG, highlightthickness=0, height=190)
         self.chart.pack(fill="both", expand=True)
         self.chart.bind("<Configure>", lambda _event: self.draw_chart())
@@ -173,13 +181,11 @@ class TemperatureWidget:
         def y_for(value):
             return bottom - (value - low) / (high - low) * plot_height
 
-        for value in (30, 50, 70, 90, 95, 100):
+        for value in (30, 50, 70, 90, 100):
             y = y_for(value)
-            color = LIMIT_COLOR if value == LIMIT_C else GRID
-            dash = (5, 4) if value == LIMIT_C else ()
-            canvas.create_line(left, y, right, y, fill=color, dash=dash, width=1)
+            canvas.create_line(left, y, right, y, fill=GRID, width=1)
             canvas.create_text(8, y, anchor="w", text=f"{value}°", fill=DIM, font=("Sans", 9))
-        canvas.create_text(right, y_for(LIMIT_C) - 8, anchor="e", text="95 °C suspend limit", fill=LIMIT_COLOR, font=("Sans", 9))
+        canvas.create_line(left, y_for(LIMIT_C), right, y_for(LIMIT_C), fill=LIMIT_COLOR, dash=(5, 4), width=1)
 
         for minutes in (15, 10, 5, 0):
             x = left + plot_width * (1 - minutes / 15)
@@ -198,12 +204,6 @@ class TemperatureWidget:
                 x = left + plot_width * max(0.0, min(1.0, 1 - (now - stamp) / WINDOW_SECONDS))
                 segment.extend((x, y_for(value)))
             self._draw_segment(canvas, segment, color)
-
-        legend_y = top + 14
-        canvas.create_line(left + 8, legend_y, left + 28, legend_y, fill=CPU_COLOR, width=3)
-        canvas.create_text(left + 34, legend_y, anchor="w", text="CPU", fill=FG, font=("Sans", 9))
-        canvas.create_line(left + 92, legend_y, left + 112, legend_y, fill=GPU_COLOR, width=3)
-        canvas.create_text(left + 118, legend_y, anchor="w", text="NVIDIA GPU", fill=FG, font=("Sans", 9))
 
     @staticmethod
     def _draw_segment(canvas, points, color):
