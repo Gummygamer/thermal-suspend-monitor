@@ -1,0 +1,12 @@
+[Unit]
+Description=Thermal monitor that suspends the computer at 95 C
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 %h/.local/bin/thermal-suspend-monitor.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
