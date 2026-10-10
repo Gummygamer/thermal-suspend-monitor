@@ -19,8 +19,8 @@ LIMIT_C = 95
 
 BG = "#111821"
 CARD = "#1b2632"
-FG = "#e4edf5"
-DIM = "#9cabb9"
+FG = "#ffffff"
+DIM = "#d0dce8"
 GRID = "#34414e"
 CPU_COLOR = "#35c7f4"
 GPU_COLOR = "#ffad3d"
@@ -70,7 +70,7 @@ class TemperatureWidget:
         self.root.minsize(400, 290)
         self.root.configure(background=BG)
         try:
-            self.root.attributes("-alpha", 0.94)
+            self.root.attributes("-alpha", 0.62)
         except tk.TclError:
             pass
         self.samples = deque(maxlen=WINDOW_SECONDS // SAMPLE_SECONDS + 2)

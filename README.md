@@ -2,7 +2,7 @@
 
 A small Linux user service that monitors CPU and NVIDIA GPU temperatures and requests system suspend when configured limits are reached.
 
-It also includes a GTK4 window that plots CPU and NVIDIA GPU temperatures over a rolling 15-minute period.
+It also includes a compact, translucent Tk window that plots CPU and NVIDIA GPU temperatures over a rolling 15-minute period.
 
 ## Policy
 
