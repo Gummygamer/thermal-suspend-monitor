@@ -2,6 +2,8 @@
 
 A small Linux user service that monitors CPU and NVIDIA GPU temperatures and requests system suspend when configured limits are reached.
 
+It also includes a GTK4 window that plots CPU and NVIDIA GPU temperatures over a rolling 15-minute period.
+
 ## Policy
 
 - CPU readings are checked once per second; NVIDIA GPU readings are checked every five seconds.
@@ -20,9 +22,18 @@ Copy both files into the matching user paths, then enable the service:
 mkdir -p ~/.local/bin ~/.config/systemd/user
 cp thermal-suspend-monitor.py ~/.local/bin/
 cp thermal-suspend-monitor.service ~/.config/systemd/user/
+cp thermal-temperature-widget.py ~/.local/bin/
 systemctl --user daemon-reload
 systemctl --user enable --now thermal-suspend-monitor.service
 ```
+
+The graph window uses Python's Tk GUI toolkit (`python3-tk` on Ubuntu). Launch it with:
+
+```sh
+python3 ~/.local/bin/thermal-temperature-widget.py
+```
+
+The graph samples CPU sensors every two seconds and the NVIDIA GPU every five seconds. It displays the maximum supported CPU sensor reading and marks the 95 °C suspend threshold.
 
 View status and logs:
 
