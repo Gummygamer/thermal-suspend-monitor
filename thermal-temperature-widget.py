@@ -66,9 +66,13 @@ class TemperatureWidget:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Thermal Monitor")
-        self.root.geometry("820x520")
-        self.root.minsize(560, 380)
+        self.root.geometry("500x350")
+        self.root.minsize(400, 290)
         self.root.configure(background=BG)
+        try:
+            self.root.attributes("-alpha", 0.94)
+        except tk.TclError:
+            pass
         self.samples = deque(maxlen=WINDOW_SECONDS // SAMPLE_SECONDS + 2)
         self.last_gpu_read = 0.0
         self.gpu_temperature = None
@@ -83,37 +87,37 @@ class TemperatureWidget:
         style.theme_use("clam")
         style.configure("TFrame", background=BG)
         style.configure("Card.TFrame", background=CARD)
-        style.configure("Title.TLabel", background=BG, foreground=FG, font=("Sans", 17, "bold"))
-        style.configure("Subtitle.TLabel", background=BG, foreground=DIM, font=("Sans", 10))
-        style.configure("CPUName.TLabel", background=CARD, foreground=CPU_COLOR, font=("Sans", 10, "bold"))
-        style.configure("GPUName.TLabel", background=CARD, foreground=GPU_COLOR, font=("Sans", 10, "bold"))
-        style.configure("Value.TLabel", background=CARD, foreground=FG, font=("Sans", 22, "bold"))
-        style.configure("Footer.TLabel", background=BG, foreground=DIM, font=("Sans", 9))
+        style.configure("Title.TLabel", background=BG, foreground=FG, font=("Sans", 14, "bold"))
+        style.configure("Subtitle.TLabel", background=BG, foreground=DIM, font=("Sans", 9))
+        style.configure("CPUName.TLabel", background=CARD, foreground=CPU_COLOR, font=("Sans", 9, "bold"))
+        style.configure("GPUName.TLabel", background=CARD, foreground=GPU_COLOR, font=("Sans", 9, "bold"))
+        style.configure("Value.TLabel", background=CARD, foreground=FG, font=("Sans", 18, "bold"))
+        style.configure("Footer.TLabel", background=BG, foreground=DIM, font=("Sans", 8))
 
-        outer = ttk.Frame(self.root, padding=(18, 16))
+        outer = ttk.Frame(self.root, padding=(12, 10))
         outer.pack(fill="both", expand=True)
         ttk.Label(outer, text="Temperature history", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(outer, text="Live CPU and NVIDIA GPU readings · rolling 15 minutes", style="Subtitle.TLabel").pack(anchor="w", pady=(3, 12))
+        ttk.Label(outer, text="CPU and NVIDIA GPU · last 15 minutes", style="Subtitle.TLabel").pack(anchor="w", pady=(2, 8))
 
         cards = ttk.Frame(outer)
-        cards.pack(fill="x", pady=(0, 12))
+        cards.pack(fill="x", pady=(0, 8))
         cards.columnconfigure(0, weight=1)
         cards.columnconfigure(1, weight=1)
         self.cpu_value = self._make_card(cards, 0, "CPU", "CPUName.TLabel")
         self.gpu_value = self._make_card(cards, 1, "NVIDIA GPU", "GPUName.TLabel")
 
-        self.chart = tk.Canvas(outer, background=BG, highlightthickness=0)
+        self.chart = tk.Canvas(outer, background=BG, highlightthickness=0, height=190)
         self.chart.pack(fill="both", expand=True)
         self.chart.bind("<Configure>", lambda _event: self.draw_chart())
         ttk.Label(
             outer,
-            text="Suspend policy: 95 °C sustained for 10 seconds · emergency: CPU 100 °C / GPU 102 °C",
+            text="95 °C for 10 s · emergency CPU 100 °C / GPU 102 °C",
             style="Footer.TLabel",
         ).pack(anchor="w", pady=(10, 0))
 
     @staticmethod
     def _make_card(parent, column, name, name_style):
-        card = ttk.Frame(parent, style="Card.TFrame", padding=(12, 9))
+        card = ttk.Frame(parent, style="Card.TFrame", padding=(10, 6))
         card.grid(row=0, column=column, sticky="ew", padx=(0, 6) if column == 0 else (6, 0))
         ttk.Label(card, text=name, style=name_style).pack(anchor="w")
         value = ttk.Label(card, text="— °C", style="Value.TLabel")
